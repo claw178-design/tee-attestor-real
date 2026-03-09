@@ -5,7 +5,7 @@
  * 1. Select provider (openai/gemini/claude)
  * 2. Build HTTP provider params with All-Hash redactions
  * 3. Call createClaimOnAttestor() → TLS tunnel → OPRF → ZK proof → signed claim
- * 4. Extract OPRF hashes into AllHashClaim format
+ * 4. Extract OPRF hashes from the signed claim parameters
  */
 
 import { createClaimOnAttestor } from '@reclaimprotocol/attestor-core'
@@ -70,6 +70,7 @@ export async function createAllHashClaim(
   }
 
   try {
+    // attestor-core uses 'http' as the provider name for all HTTP-based providers
     const result = await createClaimOnAttestor({
       name: 'http',
       params: providerParams.params as any,
@@ -81,25 +82,49 @@ export async function createAllHashClaim(
       onStep: onStep as any,
     })
 
-    // Extract claim data from attestor response
-    const claimData = result.claim?.claim
+    // ClaimTunnelResponse structure:
+    // result.claim: ProviderClaimData { provider, parameters, owner, timestampS, epoch }
+    // result.signatures: { attestorAddress, claimSignature, resultSignature }
+    const claimData = result.claim
     if (!claimData) {
-      return { success: false, error: 'No claim in attestor response', raw: result }
+      return {
+        success: false,
+        error: result.error?.message || 'No claim in attestor response',
+        raw: result,
+      }
     }
 
-    // Parse the parameters to extract OPRF hashes
-    const params = JSON.parse(claimData.parameters)
+    // The parameters field contains the canonicalized params.
+    // After OPRF processing, the original plaintext values in responseRedactions
+    // are replaced with their OPRF hashes (updateParametersFromOprfData=true by default).
+    const parameters = JSON.parse(claimData.parameters)
+
+    // Extract OPRF hashes from the response redactions in the signed parameters.
+    // The attestor replaces plaintext with OPRF hashes in-place,
+    // so we can read them from the redacted parameters.
+    const redactions = parameters.responseRedactions || []
+
+    // Build endpoint identifier from provider config
+    const endpoint = `${provider}:${parameters.url || ''}`
 
     const claim: AllHashClaim = {
-      usage_hash: params.responseRedactions?.[0]?.hash || '',
-      model_hash: params.responseRedactions?.[1]?.hash || '',
-      prompt_hash: params.responseRedactions?.[2]?.hash || '',
-      response_hash: params.responseRedactions?.[3]?.hash || '',
-      endpoint: `${provider}:${providerParams.params}`,
+      // Each redaction with hash='oprf' has its value replaced by the OPRF commitment
+      usage_hash: extractOprfHash(redactions, 0),
+      model_hash: extractOprfHash(redactions, 1),
+      prompt_hash: extractOprfHash(redactions, 2),
+      response_hash: extractOprfHash(redactions, 3),
+      endpoint,
       timestamp: claimData.timestampS,
-      attestor_sig: result.claim?.signatures?.[0]?.signature || '',
+      attestor_sig: result.signatures
+        ? bufToHex(result.signatures.claimSignature)
+        : '',
       zk_proof: Buffer.from(
-        JSON.stringify(result.claim?.signatures || [])
+        JSON.stringify({
+          attestorAddress: result.signatures?.attestorAddress || '',
+          parameters: claimData.parameters,
+          owner: claimData.owner,
+          epoch: claimData.epoch,
+        })
       ).toString('base64'),
     }
 
@@ -111,4 +136,23 @@ export async function createAllHashClaim(
       raw: err,
     }
   }
+}
+
+/**
+ * Extract OPRF hash from a redaction entry at the given index.
+ * After updateParametersFromOprfData, the jsonPath value in parameters
+ * gets replaced with the OPRF hash string.
+ */
+function extractOprfHash(redactions: any[], index: number): string {
+  if (index >= redactions.length) return ''
+  // The hash is stored in the redaction after OPRF processing
+  return redactions[index]?.hash || ''
+}
+
+/**
+ * Convert Uint8Array to hex string
+ */
+function bufToHex(buf: Uint8Array | string): string {
+  if (typeof buf === 'string') return buf
+  return '0x' + Buffer.from(buf).toString('hex')
 }

@@ -13,3 +13,5 @@
 export * from './types'
 export * from './providers'
 export { createAllHashClaim } from './claim-builder'
+export { verifyClaim, computeOprfHash, verifyFieldHash } from './verify'
+export { directCall } from './direct-client'

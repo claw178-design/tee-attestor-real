@@ -1,13 +1,20 @@
 {
   "name": "tee-attestor-real",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "All-Hash TEE Attestor using Reclaim Protocol attestor-core",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "ts-node src/test/mock-test.ts"
+    "test": "ts-node src/test/mock-test.ts",
+    "test:integration": "ts-node src/test/integration-test.ts",
+    "test:direct": "ts-node src/test/integration-test.ts",
+    "test:attestor": "ts-node src/test/integration-test.ts --attestor",
+    "cli": "ts-node src/cli.ts",
+    "attest": "ts-node src/cli.ts attest",
+    "verify": "ts-node src/cli.ts verify",
+    "hash": "ts-node src/cli.ts hash"
   },
   "keywords": [
     "tee",
@@ -24,6 +31,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@reclaimprotocol/attestor-core": "file:../../../../tmp/attestor-core/reclaimprotocol-attestor-core-5.0.0.tgz"
+    "@reclaimprotocol/attestor-core": "file:../../../../tmp/attestor-core/reclaimprotocol-attestor-core-5.0.0.tgz",
+    "dotenv": "^17.3.1"
   }
 }
