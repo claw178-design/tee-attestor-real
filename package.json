@@ -1,0 +1,29 @@
+{
+  "name": "tee-attestor-real",
+  "version": "0.1.0",
+  "description": "All-Hash TEE Attestor using Reclaim Protocol attestor-core",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "ts-node src/test/mock-test.ts"
+  },
+  "keywords": [
+    "tee",
+    "attestor",
+    "zk",
+    "oprf",
+    "reclaim"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "ethers": "^6.16.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@reclaimprotocol/attestor-core": "file:../../../../tmp/attestor-core/reclaimprotocol-attestor-core-5.0.0.tgz"
+  }
+}
