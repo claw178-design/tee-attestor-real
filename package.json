@@ -26,8 +26,9 @@
   ],
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^25.3.5",
     "@reclaimprotocol/attestor-core": "file:../../../../tmp/attestor-core/reclaimprotocol-attestor-core-5.0.0.tgz",
+    "@types/node": "^25.3.5",
+    "@types/ws": "^8.18.1",
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
     "dotenv": "^17.3.1",
