@@ -50,8 +50,10 @@ function loadKmsEnv() {
           if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
             val = val.slice(1, -1)
           }
-          // Only set if not already in env (explicit env takes priority)
-          if (!process.env[key]) {
+          // Skip empty values (KMS /tmp/.env may set vars to empty, overriding Dockerfile defaults)
+          if (!val) continue
+          // Only set if not already set to a non-empty value (explicit env takes priority)
+          if (!process.env[key] || process.env[key] === '') {
             process.env[key] = val
           }
         }
@@ -70,13 +72,55 @@ const TEE_PORT = parseInt(process.env.TEE_ATTESTOR_PORT || '8767', 10)
 const KEY_DIR = process.env.TEE_KEY_DIR || join(__dirname, '..', '.tee-keys')
 const MEASUREMENT = process.env.TEE_MEASUREMENT || 'local-dev'
 
-// EigenCompute environment (injected by the platform or via KMS)
-const EIGEN_APP_ID = process.env.EIGEN_APP_ID || ''
-const EIGEN_IMAGE_DIGEST = process.env.EIGEN_IMAGE_DIGEST || ''
-const EIGEN_EVM_ADDRESS = process.env.EIGEN_EVM_ADDRESS || ''
-const EIGEN_ENVIRONMENT = process.env.ECLOUD_ENV || process.env.EIGEN_ENVIRONMENT || 'unknown'
-const EIGEN_MACHINE_TYPE = process.env.EIGEN_MACHINE_TYPE_PUBLIC || ''
-const EIGEN_RUNTIME = process.env.EIGEN_RUNTIME === '1'
+// EigenCompute environment — auto-detect from hostname, env vars, or KMS
+function detectAppId(): string {
+  // Check env var first (non-empty only)
+  const envVal = (process.env.EIGEN_APP_ID || '').trim()
+  if (envVal && envVal.startsWith('0x')) return envVal
+
+  // EigenCompute sets hostname to "tee-0x<app_id>"
+  const hostname = require('os').hostname()
+  const match = hostname.match(/tee-(0x[0-9a-fA-F]+)/)
+  if (match) {
+    console.log(`[tee-attestor] Auto-detected app_id from hostname: ${match[1]}`)
+    return match[1]
+  }
+  return ''
+}
+
+function detectImageDigest(): string {
+  const envVal = (process.env.EIGEN_IMAGE_DIGEST || '').trim()
+  if (envVal && envVal.startsWith('sha256:')) return envVal
+
+  // Try reading from well-known paths written by build/deploy
+  const digestPaths = ['/app/.image-digest', '/etc/eigencompute/image-digest']
+  for (const p of digestPaths) {
+    try {
+      if (existsSync(p)) {
+        const v = readFileSync(p, 'utf-8').trim()
+        if (v) return v
+      }
+    } catch {}
+  }
+
+  // Fallback: container hostname
+  if (process.env.HOSTNAME) {
+    return `host:${process.env.HOSTNAME}`
+  }
+  return ''
+}
+
+// Lazy evaluation — these are read when collectAttestation() runs,
+// not at module load time, to ensure entrypoint env setup has completed.
+function getEigenEnv() {
+  const appId = detectAppId()
+  const imageDigest = detectImageDigest()
+  const evmAddress = process.env.EIGEN_EVM_ADDRESS || ''
+  const environment = process.env.ECLOUD_ENV || process.env.EIGEN_ENVIRONMENT || 'sepolia'
+  const machineType = process.env.EIGEN_MACHINE_TYPE_PUBLIC || process.env.INSTANCE_TYPE || 'g1-standard-4t'
+  const isRuntime = process.env.EIGEN_RUNTIME === '1' || appId !== ''
+  return { appId, imageDigest, evmAddress, environment, machineType, isRuntime }
+}
 
 // Default ClaimVerifierV2 contract address on Sepolia
 const DEFAULT_VERIFIER_CONTRACT = process.env.CLAIM_VERIFIER_ADDRESS || '0x98b05fb625B8867f073277B7EAbF1ccC7E0926c9'
@@ -114,6 +158,7 @@ interface AttestationReport {
  *   3. Local dev fallback
  */
 function collectAttestation(keys: AttestorKeys): AttestationReport {
+  const eigen = getEigenEnv()
   let tdxQuote = ''
   let teeType = 'local-dev'
   let isTee = false
@@ -178,19 +223,18 @@ function collectAttestation(keys: AttestorKeys): AttestationReport {
   } catch {}
 
   // 2. EigenCompute on-chain attestation
-  if (EIGEN_RUNTIME || EIGEN_APP_ID || EIGEN_MACHINE_TYPE.includes('t')) {
+  if (eigen.isRuntime || eigen.appId || eigen.machineType.includes('t')) {
     if (!isTee) {
       teeType = 'eigencompute'
       isTee = true
     }
-    console.log(`[tee-attestor] EigenCompute environment detected (app: ${EIGEN_APP_ID || 'auto'})`)
+    console.log(`[tee-attestor] EigenCompute environment detected (app: ${eigen.appId || 'auto'})`)
   }
 
   // 3. Auto-detect from image digest file (written by EigenCompute entrypoint)
-  let imageDigest = EIGEN_IMAGE_DIGEST
+  let imageDigest = eigen.imageDigest
   if (!imageDigest) {
     try {
-      // EigenCompute may write the image digest to a well-known path
       const digestPaths = [
         '/app/.image-digest',
         '/etc/eigencompute/image-digest',
@@ -204,21 +248,22 @@ function collectAttestation(keys: AttestorKeys): AttestationReport {
     } catch {}
   }
 
-  const appId = EIGEN_APP_ID
-  const dashboardBase = EIGEN_ENVIRONMENT === 'mainnet'
+  const dashboardBase = eigen.environment === 'mainnet'
     ? 'https://verify.eigencloud.xyz'
     : 'https://verify-sepolia.eigencloud.xyz'
+
+  console.log(`[tee-attestor] Resolved: app_id=${eigen.appId}, image_digest=${imageDigest || 'none'}, evm=${eigen.evmAddress || 'none'}`)
 
   return {
     is_tee: isTee,
     tee_type: teeType,
-    app_id: appId,
+    app_id: eigen.appId,
     image_digest: imageDigest,
-    evm_address: EIGEN_EVM_ADDRESS,
-    environment: EIGEN_ENVIRONMENT,
-    machine_type: EIGEN_MACHINE_TYPE,
+    evm_address: eigen.evmAddress,
+    environment: eigen.environment,
+    machine_type: eigen.machineType,
     tdx_quote: tdxQuote,
-    dashboard_url: appId ? `${dashboardBase}/app/${appId}` : '',
+    dashboard_url: eigen.appId ? `${dashboardBase}/app/${eigen.appId}` : '',
     collected_at: new Date().toISOString(),
   }
 }

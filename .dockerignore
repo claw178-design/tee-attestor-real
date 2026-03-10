@@ -1,6 +1,8 @@
 .git
 .env
-.env.*
+.env.local
+.env.test
+!.env.eigencompute
 claims/
 .tee-keys/
 *.bak
