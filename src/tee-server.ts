@@ -564,6 +564,7 @@ export function startTeeServer(port = TEE_PORT): http.Server {
   return server
 }
 
-if (require.main === module) {
+// Standalone mode: detect if this file is the entry point
+if (process.argv[1]?.endsWith('tee-server.js') || process.argv[1]?.endsWith('tee-server.ts')) {
   startTeeServer()
 }

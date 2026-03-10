@@ -1,7 +1,12 @@
-node_modules
-dist
-claims
+.git
 .env
 .env.*
-*.tgz
-.git
+claims/
+.tee-keys/
+*.bak
+Dockerfile.*
+!Dockerfile
+deploy*.sh
+*.zip
+out/
+cache/
