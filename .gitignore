@@ -9,3 +9,9 @@ claims/
 .tee-keys/
 .env.local
 attestor-core/
+
+# Foundry
+out/
+cache/
+broadcast/
+lib/
