@@ -7,6 +7,7 @@ spawn ecloud compute app upgrade 0x8eF53C5F2194ec99F20ae20266f34b4f18F6dec5 \
   --environment sepolia \
   --instance-type g1-standard-4t \
   --resource-usage-monitoring enable \
+  --env-file /root/.openclaw/workspace/tee-attestor-real/.env.eigencompute \
   --private-key 0x038c5033e7a4be6af6ae4a23461f8204478c3a963f677f66b0108e7972193631 \
   --verbose
 

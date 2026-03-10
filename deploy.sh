@@ -18,7 +18,7 @@ APP_ID=${APP_ID:-}
 IMAGE_REF=${IMAGE_REF:-ghcr.io/claw178-design/tee-attestor-real:latest}
 LOG_VIS=${LOG_VIS:-public}
 ENVIRON=${ECLOUD_ENV:-sepolia}
-RUNTIME_ENV_FILE=${RUNTIME_ENV_FILE:-}
+RUNTIME_ENV_FILE=${RUNTIME_ENV_FILE:-$SCRIPT_DIR/.env.eigencompute}
 INSTANCE_TYPE=${INSTANCE_TYPE:-g1-standard-4t}
 RESOURCE_USAGE=${RESOURCE_USAGE:-enable}
 
