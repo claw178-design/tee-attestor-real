@@ -188,8 +188,8 @@ function cmdVerify() {
 
   if (field && value) {
     // Single field verification
-    const hashKey = `${field}_hash` as keyof typeof claim
-    const hash = claim[hashKey]
+    const hashKey = `${field}_hash`
+    const hash = (claim as any)[hashKey]
     if (!hash) {
       console.error(`❌ Field "${field}" not found in claim (expected ${hashKey})`)
       process.exit(1)

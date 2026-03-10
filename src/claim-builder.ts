@@ -8,7 +8,16 @@
  * 4. Extract OPRF hashes from the signed claim parameters
  */
 
-import { createClaimOnAttestor } from '@reclaimprotocol/attestor-core'
+// Lazy-loaded: only needed when running in attestor mode (Phase 3)
+let _createClaimOnAttestor: any = null
+async function getCreateClaimOnAttestor() {
+  if (!_createClaimOnAttestor) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('@reclaimprotocol/attestor-core')
+    _createClaimOnAttestor = mod.createClaimOnAttestor
+  }
+  return _createClaimOnAttestor
+}
 import type { AllHashClaim, ClaimResult } from './types/claim'
 import { buildOpenAIProviderParams } from './providers/openai'
 import { buildGeminiProviderParams } from './providers/gemini'
@@ -71,7 +80,8 @@ export async function createAllHashClaim(
 
   try {
     // attestor-core uses 'http' as the provider name for all HTTP-based providers
-    const result = await createClaimOnAttestor({
+    const claimFn = await getCreateClaimOnAttestor()
+    const result = await claimFn({
       name: 'http',
       params: providerParams.params as any,
       secretParams: providerParams.secretParams as any,

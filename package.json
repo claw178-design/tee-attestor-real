@@ -1,6 +1,6 @@
 {
   "name": "tee-attestor-real",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "All-Hash TEE Attestor using Reclaim Protocol attestor-core",
   "main": "dist/index.js",
   "scripts": {
