@@ -78,6 +78,9 @@ const EIGEN_ENVIRONMENT = process.env.ECLOUD_ENV || process.env.EIGEN_ENVIRONMEN
 const EIGEN_MACHINE_TYPE = process.env.EIGEN_MACHINE_TYPE_PUBLIC || ''
 const EIGEN_RUNTIME = process.env.EIGEN_RUNTIME === '1'
 
+// Default ClaimVerifierV2 contract address on Sepolia
+const DEFAULT_VERIFIER_CONTRACT = process.env.CLAIM_VERIFIER_ADDRESS || '0x98b05fb625B8867f073277B7EAbF1ccC7E0926c9'
+
 // ─── Remote Attestation ─────────────────────────────────────────────
 
 interface AttestationReport {
@@ -486,6 +489,11 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
             res.end(JSON.stringify({ error: `Missing required field: ${field}` }))
             return
           }
+        }
+
+        // Inject default verifier contract address if not provided
+        if (!claimReq.verifier_address) {
+          claimReq.verifier_address = DEFAULT_VERIFIER_CONTRACT
         }
 
         const wallet = pemToEthWallet(keys.privateKey)
