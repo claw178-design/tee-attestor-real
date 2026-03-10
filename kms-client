@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+# Stub KMS client: echoes request and returns a fixed signature placeholder
+# Usage: kms-client sign <hex-digest>
+cmd="$1"; shift || true
+if [ "$cmd" = "sign" ]; then
+  echo "KMS_STUB_SIGNATURE_FOR:$1"
+  exit 0
+fi
+echo "kms-client stub: unknown command: $cmd" >&2
+exit 1

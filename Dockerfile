@@ -1,32 +1,29 @@
-FROM node:20-slim AS builder
+# TEE Attestor Signing Server — runs inside Trusted Execution Environment
+# Only the signing server (tee-server) runs here, NOT the proxy.
+# The proxy runs on the gateway host and forwards claims to this container.
 
+FROM node:22-slim AS build
 WORKDIR /app
+COPY package.json tsconfig.json ./
+COPY src/ src/
+# Remove local-only attestor-core dep, install remaining deps, then build
+RUN sed -i '/@reclaimprotocol\/attestor-core/d' package.json && \
+    npm install --ignore-scripts && \
+    npm run build
 
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-COPY tsconfig.json ./
-COPY src/ ./src/
-
-RUN npx tsc
-
-# Production stage
-FROM node:20-slim
-
+FROM node:22-slim
+LABEL org.opencontainers.image.source=https://github.com/claw178-design/tee-attestor-real
 WORKDIR /app
+COPY --from=build /app/dist/ dist/
+COPY --from=build /app/package.json ./
+# Only need dotenv at runtime
+RUN sed -i '/@reclaimprotocol\/attestor-core/d' package.json && \
+    npm install --omit=dev --ignore-scripts
 
-COPY package.json package-lock.json* ./
-RUN npm ci --production
-
-COPY --from=builder /app/dist/ ./dist/
-
-# Copy .env.example as reference
-COPY .env.example ./
+# TEE attestor listens on 8080 (EigenCompute standard)
+ENV TEE_ATTESTOR_PORT=8080
+ENV TEE_MEASUREMENT=eigencompute
 
 EXPOSE 8080
 
-# Default: run CLI help. Override with docker run args.
-# Examples:
-#   docker run -e OPENAI_API_KEY=sk-... attestor attest --provider openai --prompt "Hello"
-#   docker run attestor verify --claim /data/claim.json --field model --value gpt-4
-CMD ["node", "dist/cli.js", "--help"]
+CMD ["node", "dist/tee-server.js"]

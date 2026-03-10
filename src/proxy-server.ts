@@ -26,6 +26,7 @@ import { forwardStream, buildClaimFromStream } from './proxy-streaming'
 
 const PROXY_PORT = parseInt(process.env.ATTESTOR_PROXY_PORT || '8766', 10)
 const CLAIMS_DIR = process.env.CLAIMS_DIR || join(__dirname, '..', 'claims')
+const TEE_ATTESTOR_URL = process.env.TEE_ATTESTOR_URL || 'http://127.0.0.1:8767'
 
 // Provider detection from request path
 interface ProviderRoute {
@@ -210,6 +211,74 @@ function forwardToUpstream(
   })
 }
 
+// ─── TEE Attestor Communication ─────────────────────────────────────
+
+/**
+ * Send unsigned claim hashes to the TEE attestor for signing.
+ * Falls back to 'proxy-intercepted' if TEE is unreachable.
+ */
+async function requestTeeSigning(unsignedClaim: AllHashClaim): Promise<AllHashClaim> {
+  const { attestor_sig, zk_proof, ...signReq } = unsignedClaim
+
+  return new Promise((resolve) => {
+    const url = new URL('/sign', TEE_ATTESTOR_URL)
+    const body = JSON.stringify(signReq)
+    const transport = url.protocol === 'https:' ? https : http
+
+    const req = transport.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(Buffer.byteLength(body)),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(Buffer.concat(chunks).toString())
+            if (data.ok && data.claim) {
+              resolve({
+                usage_hash: data.claim.usage_hash,
+                model_hash: data.claim.model_hash,
+                prompt_hash: data.claim.prompt_hash,
+                response_hash: data.claim.response_hash,
+                endpoint: data.claim.endpoint,
+                timestamp: data.claim.timestamp,
+                attestor_sig: data.claim.attestor_sig,
+                zk_proof: data.claim.zk_proof || '',
+              })
+              return
+            }
+          } catch {}
+          // Fallback on parse error
+          console.warn('[attestor-proxy] TEE signing response invalid, using proxy-intercepted')
+          resolve({ ...unsignedClaim, attestor_sig: 'proxy-intercepted' })
+        })
+      },
+    )
+
+    req.on('error', (err) => {
+      console.warn(`[attestor-proxy] TEE attestor unreachable (${err.message}), using proxy-intercepted`)
+      resolve({ ...unsignedClaim, attestor_sig: 'proxy-intercepted' })
+    })
+
+    req.setTimeout(5000, () => {
+      req.destroy()
+      console.warn('[attestor-proxy] TEE attestor timeout, using proxy-intercepted')
+      resolve({ ...unsignedClaim, attestor_sig: 'proxy-intercepted' })
+    })
+
+    req.write(body)
+    req.end()
+  })
+}
+
 // ─── Build Claim from Intercepted Data ───────────────────────────────
 
 function buildClaimFromIntercept(
@@ -226,8 +295,8 @@ function buildClaimFromIntercept(
     response_hash: computeOprfHash(fields.response),
     endpoint: `${route.name}:https://${route.upstream.host}${route.pathPrefix}`,
     timestamp: Math.floor(Date.now() / 1000),
-    attestor_sig: 'proxy-intercepted',  // Not attestor-signed, proxy-witnessed
-    zk_proof: '',  // Phase 3: add ZK proof via Reclaim attestor
+    attestor_sig: 'unsigned',  // Will be signed by TEE attestor
+    zk_proof: '',
   }
 }
 
@@ -338,14 +407,16 @@ async function handleRequest(
         )
 
         if (statusCode >= 200 && statusCode < 300) {
-          const claim = buildClaimFromStream(
+          const unsignedClaim = buildClaimFromStream(
             route.name,
             `https://${route.upstream.host}${route.pathPrefix}`,
             requestBody,
             accumulated,
           )
+          const claim = await requestTeeSigning(unsignedClaim)
           const claimId = storeClaim(claim, route.name, requestBody)
-          console.log(`[${route.name}] Stream claim ${claimId} stored — model: ${accumulated.model}`)
+          const sigStatus = claim.attestor_sig !== 'proxy-intercepted' ? 'TEE-signed' : 'unsigned'
+          console.log(`[${route.name}] Stream claim ${claimId} stored (${sigStatus}) — model: ${accumulated.model}`)
         }
       } catch (e: any) {
         console.error(`[${route.name}] Stream proxy error: ${e.message}`)
@@ -365,17 +436,20 @@ async function handleRequest(
       responseHeaders['content-type'] = upstream.headers['content-type'] as string
     }
 
-    // Generate claim from non-streaming response
+    // Generate claim from non-streaming response, then sign via TEE
     if (!skipClaim && upstream.statusCode >= 200 && upstream.statusCode < 300) {
       try {
         const responseData = JSON.parse(upstream.body)
-        const claim = buildClaimFromIntercept(route, requestBody, responseData)
+        const unsignedClaim = buildClaimFromIntercept(route, requestBody, responseData)
+        const claim = await requestTeeSigning(unsignedClaim)
         const claimId = storeClaim(claim, route.name, requestBody)
 
         responseHeaders['x-attestor-claim-id'] = claimId
         responseHeaders['x-attestor-timestamp'] = String(claim.timestamp)
+        responseHeaders['x-attestor-signed'] = claim.attestor_sig !== 'proxy-intercepted' ? 'true' : 'false'
 
-        console.log(`[${route.name}] Claim ${claimId} stored — model: ${responseData.model || 'unknown'}`)
+        const sigStatus = claim.attestor_sig !== 'proxy-intercepted' ? 'TEE-signed' : 'unsigned'
+        console.log(`[${route.name}] Claim ${claimId} stored (${sigStatus}) — model: ${responseData.model || 'unknown'}`)
       } catch (e: any) {
         console.error(`[${route.name}] Claim extraction failed: ${e.message}`)
       }

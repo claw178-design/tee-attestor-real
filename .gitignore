@@ -4,3 +4,5 @@ dist/
 claims-*.json
 *.tgz
 claims/
+.tee-keys/
+.env.local

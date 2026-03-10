@@ -1,0 +1,12 @@
+# EigenCompute overlay — adds KMS client and compute helpers
+FROM ghcr.io/claw178-design/tee-attestor-real:latest
+
+COPY --chmod=755 compute-source-env.sh /usr/local/bin/compute-source-env.sh
+COPY --chmod=755 kms-client /usr/local/bin/kms-client
+COPY --chmod=644 kms-signing-public-key.pem /usr/local/bin/kms-signing-public-key.pem
+
+ARG BUILD_TS
+LABEL org.opencontainers.image.created=${BUILD_TS}
+LABEL org.opencontainers.image.description="TEE All-Hash Attestor for EigenCompute"
+
+EXPOSE 8080

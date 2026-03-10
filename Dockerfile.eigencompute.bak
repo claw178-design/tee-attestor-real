@@ -1,0 +1,18 @@
+# EigenCompute overlay — adds KMS and compute-source-env for TEE runtime
+FROM ghcr.io/claw178-design/tee-attestor-real:latest
+
+USER root
+
+# KMS integration files (if present in build context)
+COPY --chmod=755 deploy/compute-source-env.sh /usr/local/bin/compute-source-env.sh
+COPY --chmod=755 deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+USER attestor
+
+ARG BUILD_TS
+LABEL org.opencontainers.image.created=${BUILD_TS}
+LABEL org.opencontainers.image.description="TEE attestor (real) for EigenCompute"
+
+EXPOSE 8767
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
