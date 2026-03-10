@@ -28,7 +28,11 @@ RUN sed -i '/@reclaimprotocol\/attestor-core/d' package.json && \
     npx tsc
 
 FROM node:22-slim
-RUN apt-get update -y && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y python3 make g++ curl debian-keyring debian-archive-keyring apt-transport-https && \
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && \
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list && \
+    apt-get update -y && apt-get install -y caddy && \
+    rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.source=https://github.com/claw178-design/tee-attestor-real
 LABEL org.opencontainers.image.description="zkTLS Attestor (Reclaim Protocol) in TEE — All-Hash, K2 API key hiding"
 WORKDIR /app
@@ -42,12 +46,17 @@ COPY --from=app-build /app/package.json ./
 # Only production deps (ethers)
 RUN npm install --omit=dev --ignore-scripts
 
+# Caddy TLS reverse proxy config
+COPY Caddyfile /app/Caddyfile
+
 ENV TEE_ATTESTOR_PORT=8080
 ENV ATTESTOR_CORE_PORT=8001
 ENV TEE_MEASUREMENT=eigencompute
 ENV DISABLE_BGP_CHECKS=1
 ENV NODE_ENV=production
+ENV DOMAIN=localhost
+ENV APP_PORT=8080
 
-EXPOSE 8080
+EXPOSE 80 443 8080
 
-CMD ["node", "dist/entrypoint-tee.js"]
+CMD ["sh", "-c", "node dist/entrypoint-tee.js & caddy run --config /app/Caddyfile --adapter caddyfile"]
