@@ -38,15 +38,28 @@ if [ -z "${EIGEN_APP_ID:-}" ]; then
   fi
 fi
 
-# If EigenCompute's TLS layer is active (Caddy on 8080), our app moves to APP_PORT
-# Detect by checking if compute-source-env.sh set up TLS
-if [ -f /usr/local/bin/tls-keygen ]; then
-  echo "[entrypoint] TLS available (tls-keygen found)"
-  echo "[entrypoint] EigenCompute Caddy handles port 8080 (HTTPS)"
+# Detect TLS mode:
+# On EigenCompute, compute-source-env.sh runs BEFORE this entrypoint and:
+#   1. Obtains TLS certs via tls-keygen → /run/tls/
+#   2. Starts Caddy on :8080 (HTTPS) proxying to APP_PORT
+# So we just need to set Node.js to listen on APP_PORT (not 8080).
+TLS_CERT="/run/tls/fullchain.pem"
+TLS_KEY="/run/tls/privkey.pem"
+CADDY_RUNNING=$(pgrep -x caddy > /dev/null 2>&1 && echo "yes" || echo "no")
+
+if [ "$CADDY_RUNNING" = "yes" ]; then
+  # EigenCompute's compute-source-env.sh already started Caddy
+  echo "[entrypoint] Caddy already running (started by EigenCompute)"
   export TEE_ATTESTOR_PORT="${APP_PORT:-8081}"
-  echo "[entrypoint] Node.js on port: ${TEE_ATTESTOR_PORT}"
+  echo "[entrypoint] Caddy :8080 (HTTPS) → Node.js :${TEE_ATTESTOR_PORT}"
+elif [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+  # Certs exist but Caddy not running — start it ourselves
+  echo "[entrypoint] TLS certs found, starting Caddy for HTTPS on :8080"
+  export TEE_ATTESTOR_PORT="${APP_PORT:-8081}"
+  echo "[entrypoint] Caddy :8080 (HTTPS) → Node.js :${TEE_ATTESTOR_PORT}"
+  caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 else
-  echo "[entrypoint] No TLS layer detected — Node.js serves 8080 directly"
+  echo "[entrypoint] No TLS available — Node.js serves HTTP on :8080 directly"
   export TEE_ATTESTOR_PORT=8080
 fi
 

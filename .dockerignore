@@ -12,3 +12,5 @@ deploy*.sh
 *.zip
 out/
 cache/
+attestor-core/.git
+attestor-core/node_modules/.cache
