@@ -52,7 +52,10 @@ const ROUTES: ProviderRoute[] = [
   },
   {
     name: 'claude',
-    upstream: { host: 'api.anthropic.com', port: 443 },
+    upstream: {
+      host: process.env.CLAUDE_UPSTREAM_HOST || 'api.anthropic.com',
+      port: parseInt(process.env.CLAUDE_UPSTREAM_PORT || '443', 10),
+    },
     pathPrefix: '/v1/messages',
     authHeader: 'x-api-key',
     extractFields: (data) => ({
@@ -162,7 +165,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   })
 }
 
-// ─── Upstream HTTPS Call ─────────────────────────────────────────────
+// ─── Upstream Call (HTTP or HTTPS based on port) ────────────────────
 
 function forwardToUpstream(
   route: ProviderRoute,
@@ -172,7 +175,9 @@ function forwardToUpstream(
   body: string,
 ): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = https.request(
+    const isLocal = route.upstream.host === '127.0.0.1' || route.upstream.host === 'localhost'
+    const transport = isLocal ? http : https
+    const req = transport.request(
       {
         hostname: route.upstream.host,
         port: route.upstream.port,
@@ -180,7 +185,7 @@ function forwardToUpstream(
         method,
         headers: {
           ...headers,
-          host: route.upstream.host,
+          host: isLocal ? `${route.upstream.host}:${route.upstream.port}` : route.upstream.host,
           'content-length': String(Buffer.byteLength(body)),
         },
       },
@@ -197,6 +202,9 @@ function forwardToUpstream(
       },
     )
     req.on('error', reject)
+    req.setTimeout(60000, () => {
+      req.destroy(new Error('Upstream request timed out after 60s'))
+    })
     if (body) req.write(body)
     req.end()
   })
@@ -300,6 +308,7 @@ async function handleRequest(
     const upstreamHeaders: Record<string, string> = {}
     const skipHeaders = new Set([
       'host', 'connection', 'transfer-encoding',
+      'accept-encoding',  // prevent gzip responses from upstream
       'x-attestor-target', 'x-attestor-skip',
     ])
     for (const [key, val] of Object.entries(req.headers)) {

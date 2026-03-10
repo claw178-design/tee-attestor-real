@@ -96,7 +96,9 @@ export function forwardStream(
   clientRes: http.ServerResponse,
 ): Promise<{ statusCode: number; accumulated: StreamAccumulator }> {
   return new Promise((resolve, reject) => {
-    const req = https.request(
+    const isLocal = host === '127.0.0.1' || host === 'localhost'
+    const transport = isLocal ? http : https
+    const req = transport.request(
       {
         hostname: host,
         port,
@@ -104,7 +106,7 @@ export function forwardStream(
         method,
         headers: {
           ...headers,
-          host,
+          host: isLocal ? `${host}:${port}` : host,
           'content-length': String(Buffer.byteLength(body)),
         },
       },
