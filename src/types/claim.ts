@@ -17,8 +17,18 @@ export interface AllHashClaim {
   timestamp: number
   /** Attestor's signature over the claim */
   attestor_sig: string
-  /** ZK proof blob (base64) for independent verification */
+  /** ZK proof blob (base64-encoded Groth16 proof) for independent verification */
   zk_proof: string
+}
+
+/**
+ * ZK-enhanced claim — includes structured proof data for on-chain verification.
+ */
+export interface ZkEnhancedClaim extends AllHashClaim {
+  /** Whether hashes use Poseidon (ZK-friendly) vs SHA-256 */
+  hash_type: 'poseidon' | 'sha256'
+  /** ZK proof generation time in milliseconds */
+  zk_proof_time_ms?: number
 }
 
 /**

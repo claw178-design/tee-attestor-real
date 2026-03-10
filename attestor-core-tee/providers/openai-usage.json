@@ -1,0 +1,36 @@
+{
+  "name": "http",
+  "params": {
+    "url": "https://api.openai.com/v1/chat/completions",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"user\",\"content\":\"{{prompt}}\"}],\"temperature\":0.7}",
+    "responseMatches": [
+      {
+        "type": "regex",
+        "value": "\"total_tokens\":(?<totalTokens>\\d+)"
+      },
+      {
+        "type": "regex",
+        "value": "\"model\":\"(?<modelUsed>[^\"]+)\""
+      }
+    ],
+    "responseRedactions": [
+      {
+        "jsonPath": "$.usage",
+        "regex": "\"usage\":\\{[^}]+\\}",
+        "xPath": ""
+      },
+      {
+        "jsonPath": "$.choices[0].message.content",
+        "regex": "\"content\":\"([^\"]+)\"",
+        "xPath": ""
+      }
+    ]
+  },
+  "secretParams": {
+    "authorisationHeader": "Bearer {{apiKey}}"
+  }
+}

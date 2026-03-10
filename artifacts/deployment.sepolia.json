@@ -1,0 +1,10 @@
+{
+  "contract": "ClaimVerifier",
+  "address": "0xA8828BCf5430427965D9fBcfD956fFd823290811",
+  "deployer": "0x8733119C5AE31458EDcBA1678872aF79c09E04D7",
+  "attestor": "0x42A5382b4F7A45734B7693A0D7E90cCF8c242Bfb",
+  "chain": "sepolia",
+  "chainId": 11155111,
+  "deployTx": "0xd9fdde839ff5f21589d9ead529554529be5da63749483d0ff45d54a157281df2",
+  "timestamp": "2026-03-10T11:53:51.412Z"
+}

@@ -1,8 +1,11 @@
 node_modules/
 dist/
 .env
+attestor-core/node_modules/
+attestor-core/.tgz
 claims-*.json
 *.tgz
 claims/
 .tee-keys/
 .env.local
+attestor-core/

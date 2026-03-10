@@ -27,6 +27,8 @@ import { createHash, createSign, createVerify, generateKeyPairSync } from 'crypt
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
+import { pemToEthWallet, ethSignClaim, ethVerifyClaim, EthSignRequest } from './eth-signer'
+import { ethers } from 'ethers'
 
 // ─── Bootstrap: source KMS env if available ──────────────────────────
 // EigenCompute's compute-source-env.sh writes env vars to /tmp/.env
@@ -450,6 +452,82 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
       } catch (e: any) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: `Verification failed: ${e.message}` }))
+      }
+      return
+    }
+
+    // GET /eth-address — Attestor's Ethereum address
+    if (url === '/eth-address' && req.method === 'GET') {
+      try {
+        const wallet = pemToEthWallet(keys.privateKey)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          eth_address: wallet.address,
+          fingerprint: keys.fingerprint,
+        }))
+      } catch (e: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `Failed to derive ETH address: ${e.message}` }))
+      }
+      return
+    }
+
+    // POST /eth-sign — Sign claim with EIP-712 (Ethereum-compatible)
+    if (url === '/eth-sign' && req.method === 'POST') {
+      try {
+        const body = await readBody(req)
+        const claimReq: EthSignRequest = JSON.parse(body)
+
+        // Validate required fields
+        const required = ['usage_hash', 'model_hash', 'prompt_hash', 'response_hash', 'endpoint', 'timestamp']
+        for (const field of required) {
+          if (!(field in claimReq)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: `Missing required field: ${field}` }))
+            return
+          }
+        }
+
+        const wallet = pemToEthWallet(keys.privateKey)
+        const signed = await ethSignClaim(claimReq, wallet)
+        signCount++
+
+        // Also include standard attestation metadata
+        const result = {
+          ok: true,
+          claim: {
+            ...signed,
+            attestor_fingerprint: keys.fingerprint,
+            tee_measurement: attestation.image_digest || MEASUREMENT,
+            app_id: attestation.app_id,
+            image_digest: attestation.image_digest,
+            tee_type: attestation.tee_type,
+          },
+        }
+
+        console.log(`[tee-attestor] EIP-712 signed claim #${signCount} — endpoint: ${claimReq.endpoint}, signer: ${wallet.address}`)
+
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(result))
+      } catch (e: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `EIP-712 sign failed: ${e.message}` }))
+      }
+      return
+    }
+
+    // POST /eth-verify — Verify an EIP-712 signed claim
+    if (url === '/eth-verify' && req.method === 'POST') {
+      try {
+        const body = await readBody(req)
+        const { claim } = JSON.parse(body)
+        const result = ethVerifyClaim(claim)
+
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(result))
+      } catch (e: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `EIP-712 verify failed: ${e.message}` }))
       }
       return
     }

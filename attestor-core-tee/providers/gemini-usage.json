@@ -1,0 +1,37 @@
+{
+  "name": "http",
+  "params": {
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/{{model}}:generateContent?key={{apiKey}}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"contents\":[{\"parts\":[{\"text\":\"{{prompt}}\"}]}],\"generationConfig\":{\"maxOutputTokens\":256}}",
+    "responseMatches": [
+      {
+        "type": "regex",
+        "value": "\"totalTokenCount\":(?<totalTokens>\\d+)"
+      }
+    ],
+    "responseRedactions": [
+      {
+        "jsonPath": "$.usageMetadata",
+        "regex": "\"usageMetadata\":\\{[^}]+\\}",
+        "xPath": ""
+      },
+      {
+        "jsonPath": "$.candidates[0].content.parts[0].text",
+        "regex": "\"text\":\"([^\"]+)\"",
+        "xPath": ""
+      }
+    ],
+    "paramValues": {
+      "apiKey": "{{apiKey}}"
+    }
+  },
+  "secretParams": {
+    "paramValues": {
+      "apiKey": "{{apiKey}}"
+    }
+  }
+}

@@ -11,7 +11,7 @@
 import { config } from 'dotenv'
 import { readFileSync, writeFileSync } from 'fs'
 import { createAllHashClaim } from './claim-builder'
-import { directCall } from './direct-client'
+import { createOpenAIClaim, createGeminiClaim, createClaudeClaim } from './zktls-client'
 import { verifyClaim, computeOprfHash, verifyFieldHash } from './verify'
 
 config({ path: `${__dirname}/../.env` })
@@ -130,21 +130,26 @@ async function cmdAttest() {
   let claim: any
 
   if (isDirect) {
-    // Direct mode: call API without attestor
-    const result = await directCall({
-      provider,
-      apiKey,
-      requestBody,
-      geminiModel,
-    })
-
-    if (!result.success) {
-      console.error(`❌ Direct call failed: ${result.error}`)
-      process.exit(1)
+    // Direct mode: use zkTLS client through attestor (no proxy)
+    const ownerPrivateKey = require('crypto').randomBytes(32).toString('hex')
+    const zkOpts = {
+      attestorUrl: attestorUrl || 'ws://localhost:8001/ws',
+      ownerPrivateKey,
+      onStep: (step: any) => console.log(`   → ${step.name}`),
     }
 
-    console.log('\n📡 API Response:')
-    console.log(JSON.stringify(result.response, null, 2))
+    let result: any
+    switch (provider) {
+      case 'openai':
+        result = await createOpenAIClaim(zkOpts, apiKey, requestBody)
+        break
+      case 'gemini':
+        result = await createGeminiClaim(zkOpts, apiKey, geminiModel || 'gemini-2.5-flash', requestBody)
+        break
+      case 'claude':
+        result = await createClaudeClaim(zkOpts, apiKey, requestBody)
+        break
+    }
     claim = result.claim
   } else {
     // Attestor mode: route through Reclaim

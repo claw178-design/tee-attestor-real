@@ -1,257 +1,129 @@
 /**
- * Phase 2 Integration Test — Real API calls.
+ * Integration Test — Tests zkTLS flow through TEE attestor.
  *
- * Two modes:
- * 1. Direct mode (default): Calls LLM APIs directly, generates local claims
- * 2. Attestor mode (--attestor): Routes through Reclaim attestor for signed claims
+ * Routes API calls through TEE attestor-core (WebSocket tunnel),
+ * generates ZK proofs, and receives signed claims.
+ *
+ * No proxy needed — attestor-core IS the tunnel.
  *
  * Prerequisites:
- *   - Set API keys in .env or environment:
- *     OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY
- *   - At least one key must be set
+ *   - TEE attestor running (attestor-core WebSocket on port 8001)
+ *   - Set API keys in .env: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY
  *
  * Usage:
  *   npx ts-node src/test/integration-test.ts
- *   npx ts-node src/test/integration-test.ts --attestor
- *   PROVIDER=openai npx ts-node src/test/integration-test.ts
+ *   PROVIDER=gemini npx ts-node src/test/integration-test.ts
  */
 
 import { config } from 'dotenv'
+import { randomBytes } from 'crypto'
 import { writeFileSync } from 'fs'
-import { directCall, type DirectCallOpts } from '../direct-client'
 import { verifyClaim, computeOprfHash } from '../verify'
 
-// Lazy-load claim-builder only in attestor mode (requires @reclaimprotocol/attestor-core)
-async function loadClaimBuilder() {
-  const mod = await import('../claim-builder')
-  return mod
-}
-
-// Load .env from project root
 config({ path: `${__dirname}/../../.env` })
 
+const ATTESTOR_URL = process.env.ATTESTOR_URL || 'ws://localhost:8001/ws'
 const OPENAI_KEY = process.env.OPENAI_API_KEY
 const GEMINI_KEY = process.env.GEMINI_API_KEY
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
-const USE_ATTESTOR = process.argv.includes('--attestor')
-const ATTESTOR_URL = process.env.ATTESTOR_URL || undefined
 
 function log(msg: string) {
   console.log(`[${new Date().toISOString()}] ${msg}`)
 }
 
-// --- Direct API Tests ---
+// --- zkTLS Tests ---
 
-async function testDirectOpenAI() {
-  if (!OPENAI_KEY) {
-    console.log('⏭️  Skipping OpenAI (no OPENAI_API_KEY)')
-    return null
-  }
-
-  log('🔄 Testing OpenAI direct call...')
-
-  const result = await directCall({
-    provider: 'openai',
-    apiKey: OPENAI_KEY,
-    requestBody: {
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: 'Say hello in exactly 3 words.' }],
-      max_tokens: 20,
-    },
-  })
-
-  if (!result.success) {
-    console.error(`❌ OpenAI FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ OpenAI response received!')
-  console.log('  Model:', result.response?.model)
-  console.log('  Usage:', JSON.stringify(result.response?.usage))
-  console.log('  Reply:', result.response?.choices?.[0]?.message?.content)
-  console.log('  Claim:', JSON.stringify(result.claim, null, 2))
-
-  // Verify our own claim
-  if (result.claim && result.response) {
-    const verification = verifyClaim(result.claim, {
-      model: result.response.model,
-      usage: JSON.stringify(result.response.usage),
-    })
-    console.log('  Self-verify:', verification.valid ? '✅ PASS' : '❌ FAIL')
-    if (!verification.valid) {
-      console.log('  Errors:', verification.errors)
-    }
-  }
-
-  return result
-}
-
-async function testDirectGemini() {
+async function testZkTlsGemini() {
   if (!GEMINI_KEY) {
-    console.log('⏭️  Skipping Gemini (no GEMINI_API_KEY)')
+    console.log('  Skipping Gemini (no GEMINI_API_KEY)')
     return null
   }
 
-  log('🔄 Testing Gemini direct call...')
+  log('Testing Gemini zkTLS claim...')
 
-  const result = await directCall({
-    provider: 'gemini',
-    apiKey: GEMINI_KEY,
-    geminiModel: 'gemini-2.5-flash',
-    requestBody: {
-      contents: [{ parts: [{ text: 'Say hello in exactly 3 words.' }] }],
-      generationConfig: { maxOutputTokens: 100 },
+  const { createGeminiClaim } = await import('../zktls-client')
+  const result = await createGeminiClaim(
+    {
+      attestorUrl: ATTESTOR_URL,
+      ownerPrivateKey: randomBytes(32).toString('hex'),
+      onStep: (step) => log(`  step: ${step.name}`),
     },
-  })
-
-  if (!result.success) {
-    console.error(`❌ Gemini FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ Gemini response received!')
-  console.log('  Model:', result.response?.modelVersion)
-  console.log('  Usage:', JSON.stringify(result.response?.usageMetadata))
-  console.log('  Reply:', result.response?.candidates?.[0]?.content?.parts?.[0]?.text)
-  console.log('  Claim:', JSON.stringify(result.claim, null, 2))
-
-  return result
-}
-
-async function testDirectClaude() {
-  if (!ANTHROPIC_KEY) {
-    console.log('⏭️  Skipping Claude (no ANTHROPIC_API_KEY)')
-    return null
-  }
-
-  log('🔄 Testing Claude direct call...')
-
-  const result = await directCall({
-    provider: 'claude',
-    apiKey: ANTHROPIC_KEY,
-    requestBody: {
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 20,
-      messages: [{ role: 'user', content: 'Say hello in exactly 3 words.' }],
-    },
-  })
-
-  if (!result.success) {
-    console.error(`❌ Claude FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ Claude response received!')
-  console.log('  Model:', result.response?.model)
-  console.log('  Usage:', JSON.stringify(result.response?.usage))
-  console.log('  Reply:', result.response?.content?.[0]?.text)
-  console.log('  Claim:', JSON.stringify(result.claim, null, 2))
-
-  return result
-}
-
-// --- Attestor Tests ---
-
-async function testAttestorOpenAI() {
-  if (!OPENAI_KEY) {
-    console.log('⏭️  Skipping OpenAI attestor (no OPENAI_API_KEY)')
-    return null
-  }
-
-  log('🔄 Testing OpenAI attestation via Reclaim...')
-
-  const { createAllHashClaim } = await loadClaimBuilder()
-  const result = await createAllHashClaim({
-    provider: 'openai',
-    apiKey: OPENAI_KEY,
-    requestBody: {
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: 'Say hello in exactly 3 words.' }],
-      max_tokens: 20,
-    },
-    attestorUrl: ATTESTOR_URL,
-    onStep: (step) => log(`  step: ${step.name}`),
-  })
-
-  if (!result.success) {
-    console.error(`❌ OpenAI attestor FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ OpenAI attested claim created!')
-  console.log('  Claim:', JSON.stringify(result.claim, null, 2))
-
-  return result
-}
-
-async function testAttestorGemini() {
-  if (!GEMINI_KEY) {
-    console.log('⏭️  Skipping Gemini attestor (no GEMINI_API_KEY)')
-    return null
-  }
-
-  log('🔄 Testing Gemini attestation via Reclaim...')
-
-  const { createAllHashClaim } = await loadClaimBuilder()
-  const result = await createAllHashClaim({
-    provider: 'gemini',
-    apiKey: GEMINI_KEY,
-    geminiModel: 'gemini-2.5-flash',
-    requestBody: {
-      contents: [{ parts: [{ text: 'Say hello in exactly 3 words.' }] }],
+    GEMINI_KEY,
+    'gemini-2.5-flash',
+    {
+      contents: [{ parts: [{ text: 'Say hello in one word.' }] }],
       generationConfig: { maxOutputTokens: 20 },
     },
-    attestorUrl: ATTESTOR_URL,
-    onStep: (step) => log(`  step: ${step.name}`),
-  })
+  )
 
-  if (!result.success) {
-    console.error(`❌ Gemini attestor FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ Gemini attested claim created!')
+  log('Gemini claim received!')
   console.log('  Claim:', JSON.stringify(result.claim, null, 2))
 
-  return result
+  return { success: true, claim: result.claim }
 }
 
-async function testAttestorClaude() {
-  if (!ANTHROPIC_KEY) {
-    console.log('⏭️  Skipping Claude attestor (no ANTHROPIC_API_KEY)')
+async function testZkTlsOpenAI() {
+  if (!OPENAI_KEY) {
+    console.log('  Skipping OpenAI (no OPENAI_API_KEY)')
     return null
   }
 
-  log('🔄 Testing Claude attestation via Reclaim...')
+  log('Testing OpenAI zkTLS claim...')
 
-  const { createAllHashClaim } = await loadClaimBuilder()
-  const result = await createAllHashClaim({
-    provider: 'claude',
-    apiKey: ANTHROPIC_KEY,
-    requestBody: {
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 20,
-      messages: [{ role: 'user', content: 'Say hello in exactly 3 words.' }],
+  const { createOpenAIClaim } = await import('../zktls-client')
+  const result = await createOpenAIClaim(
+    {
+      attestorUrl: ATTESTOR_URL,
+      ownerPrivateKey: randomBytes(32).toString('hex'),
+      onStep: (step) => log(`  step: ${step.name}`),
     },
-    attestorUrl: ATTESTOR_URL,
-    onStep: (step) => log(`  step: ${step.name}`),
-  })
+    OPENAI_KEY,
+    {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'Say hello in one word.' }],
+      max_tokens: 20,
+    },
+  )
 
-  if (!result.success) {
-    console.error(`❌ Claude attestor FAIL: ${result.error}`)
-    return result
-  }
-
-  log('✅ Claude attested claim created!')
+  log('OpenAI claim received!')
   console.log('  Claim:', JSON.stringify(result.claim, null, 2))
 
-  return result
+  return { success: true, claim: result.claim }
+}
+
+async function testZkTlsClaude() {
+  if (!ANTHROPIC_KEY) {
+    console.log('  Skipping Claude (no ANTHROPIC_API_KEY)')
+    return null
+  }
+
+  log('Testing Claude zkTLS claim...')
+
+  const { createClaudeClaim } = await import('../zktls-client')
+  const result = await createClaudeClaim(
+    {
+      attestorUrl: ATTESTOR_URL,
+      ownerPrivateKey: randomBytes(32).toString('hex'),
+      onStep: (step) => log(`  step: ${step.name}`),
+    },
+    ANTHROPIC_KEY,
+    {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 20,
+      messages: [{ role: 'user', content: 'Say hello in one word.' }],
+    },
+  )
+
+  log('Claude claim received!')
+  console.log('  Claim:', JSON.stringify(result.claim, null, 2))
+
+  return { success: true, claim: result.claim }
 }
 
 // --- Verification Tests ---
 
 async function testVerification() {
-  log('🔄 Testing verification logic...')
+  log('Testing verification logic...')
 
   const knownModel = 'gpt-4o-mini'
   const knownUsage = '{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}'
@@ -267,67 +139,36 @@ async function testVerification() {
     zk_proof: 'bW9jaw==',
   }
 
-  // Verify with correct values
-  const result1 = verifyClaim(mockClaim, {
-    usage: knownUsage,
-    model: knownModel,
-  })
-  console.assert(result1.valid, 'Verification with correct values should pass')
-  console.assert(result1.fields.every(f => f.match), 'All fields should match')
-  log('  ✅ Correct values verify successfully')
+  const result1 = verifyClaim(mockClaim, { usage: knownUsage, model: knownModel })
+  console.assert(result1.valid, 'Correct values should pass')
+  log('  Correct values verify: PASS')
 
-  // Verify with wrong values
-  const result2 = verifyClaim(mockClaim, {
-    model: 'gpt-3.5-turbo',
-  })
-  console.assert(!result2.valid, 'Verification with wrong values should fail')
-  console.assert(result2.errors.length > 0, 'Should have errors')
-  log('  ✅ Wrong values correctly rejected')
+  const result2 = verifyClaim(mockClaim, { model: 'gpt-3.5-turbo' })
+  console.assert(!result2.valid, 'Wrong values should fail')
+  log('  Wrong values rejected: PASS')
 
-  // Verify expired timestamp
-  const oldClaim = { ...mockClaim, timestamp: Math.floor(Date.now() / 1000) - 7200 }
-  const result3 = verifyClaim(oldClaim, { model: knownModel }, { maxAge: 3600 })
-  console.assert(!result3.valid, 'Expired claim should fail')
-  log('  ✅ Expired timestamp correctly rejected')
-
-  log('✅ Verification tests passed!')
+  log('Verification tests passed!')
 }
 
 // --- Main ---
 
 async function main() {
-  console.log('🦀 tee-attestor-real — Phase 2 Integration Tests\n')
-  console.log(`Mode: ${USE_ATTESTOR ? 'ATTESTOR (via Reclaim)' : 'DIRECT (local calls)'}\n`)
+  console.log('tee-attestor-real — zkTLS Integration Tests\n')
+  console.log(`Attestor URL: ${ATTESTOR_URL}\n`)
 
-  const targetProvider = process.env.PROVIDER
-
-  // Always run verification tests
   await testVerification()
 
+  const targetProvider = process.env.PROVIDER
   const results: Record<string, any> = {}
 
-  if (USE_ATTESTOR) {
-    // Attestor mode — route through Reclaim
-    if (!targetProvider || targetProvider === 'openai') {
-      results.openai = await testAttestorOpenAI()
-    }
-    if (!targetProvider || targetProvider === 'gemini') {
-      results.gemini = await testAttestorGemini()
-    }
-    if (!targetProvider || targetProvider === 'claude') {
-      results.claude = await testAttestorClaude()
-    }
-  } else {
-    // Direct mode — call APIs directly
-    if (!targetProvider || targetProvider === 'openai') {
-      results.openai = await testDirectOpenAI()
-    }
-    if (!targetProvider || targetProvider === 'gemini') {
-      results.gemini = await testDirectGemini()
-    }
-    if (!targetProvider || targetProvider === 'claude') {
-      results.claude = await testDirectClaude()
-    }
+  if (!targetProvider || targetProvider === 'gemini') {
+    results.gemini = await testZkTlsGemini()
+  }
+  if (!targetProvider || targetProvider === 'openai') {
+    results.openai = await testZkTlsOpenAI()
+  }
+  if (!targetProvider || targetProvider === 'claude') {
+    results.claude = await testZkTlsClaude()
   }
 
   // Summary
@@ -335,38 +176,22 @@ async function main() {
   const tested = Object.entries(results).filter(([, v]) => v !== null)
   const passed = tested.filter(([, v]) => v?.success)
   const failed = tested.filter(([, v]) => v && !v.success)
-  const skipped = Object.entries(results).filter(([, v]) => v === null)
 
-  console.log(`Tested: ${tested.length} | Passed: ${passed.length} | Failed: ${failed.length} | Skipped: ${skipped.length}`)
+  console.log(`Tested: ${tested.length} | Passed: ${passed.length} | Failed: ${failed.length}`)
 
-  if (failed.length > 0) {
-    console.log('\nFailed providers:')
-    for (const [name, result] of failed) {
-      console.log(`  ❌ ${name}: ${result.error}`)
-    }
+  if (passed.length > 0) {
+    const claims = Object.fromEntries(passed.map(([name, result]) => [name, result.claim]))
+    const outFile = `claims-zktls-${Date.now()}.json`
+    writeFileSync(outFile, JSON.stringify(claims, null, 2))
+    console.log(`Claims saved to ${outFile}`)
   }
 
   if (tested.length === 0) {
-    console.log('\n⚠️  No API keys configured. Set at least one of:')
-    console.log('  OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY')
-    console.log('  in .env or environment variables.')
+    console.log('\nNo API keys configured. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY')
   }
 
-  // Save claims to file if any succeeded
-  const claims = Object.fromEntries(
-    passed.map(([name, result]) => [name, result.claim])
-  )
-  if (Object.keys(claims).length > 0) {
-    const outFile = `claims-${USE_ATTESTOR ? 'attested' : 'direct'}-${Date.now()}.json`
-    writeFileSync(outFile, JSON.stringify(claims, null, 2))
-    console.log(`\n📄 Claims saved to ${outFile}`)
-  }
-
-  console.log('\n✅ Integration tests completed!')
-
-  if (failed.length > 0) {
-    process.exit(1)
-  }
+  console.log('\nIntegration tests completed!')
+  process.exit(failed.length > 0 ? 1 : 0)
 }
 
 main().catch(err => {

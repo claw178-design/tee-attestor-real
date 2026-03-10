@@ -1,0 +1,55 @@
+# TEE Attestor Server — Reclaim attestor-core running inside TEE
+#
+# This container runs the full Reclaim Protocol attestor server:
+# - WebSocket server for TLS tunneling
+# - TLS session recording (sees ciphertext, not K2-hidden API keys)
+# - ZK proof verification (snarkjs/gnark)
+# - Claim signing (ECDSA secp256k1)
+# - TOPRF computation for hash commitments
+#
+# Architecture:
+#   Client (local proxy) ──WebSocket──→ TEE Attestor ──TLS──→ Real API
+#   Client generates ZK proof → TEE verifies + signs claim
+
+FROM node:24-slim AS build
+
+RUN apt-get update -y && apt-get install -y git python3 make g++ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy attestor-core source (from /tmp/attestor-core or bundled)
+COPY attestor-core/ /app/
+
+# Install dependencies and build
+RUN npm ci --ignore-scripts || npm install
+RUN npm run build || npx tsc -p tsconfig.build.json
+
+# Download ZK verification files (snarkjs circuits)
+RUN npm run download:zk-files 2>/dev/null || echo "ZK files download skipped (will use snarkjs runtime)"
+
+# Build browser RPC client (optional, for browser-based verification)
+RUN npm run build:browser 2>/dev/null || echo "Browser build skipped"
+
+# Production image
+FROM node:24-slim
+
+LABEL org.opencontainers.image.source=https://github.com/claw178-design/tee-attestor-real
+LABEL org.opencontainers.image.description="zkTLS Attestor Server (Reclaim Protocol) running in TEE"
+
+WORKDIR /app
+
+COPY --from=build /app/ /app/
+
+# Prune dev dependencies
+RUN npm prune --production 2>/dev/null || true
+
+# Attestor server port (Reclaim default: 8001, EigenCompute: 8080)
+ENV PORT=8080
+ENV NODE_ENV=production
+# Disable BGP checks in TEE (not needed for our use case)
+ENV DISABLE_BGP_CHECKS=1
+
+EXPOSE 8080
+
+# Start the attestor server
+CMD ["node", "--import", "tsx", "src/scripts/start-server.ts"]
