@@ -12,7 +12,7 @@
 {$DOMAIN:localhost} {
 	tls /run/tls/fullchain.pem /run/tls/privkey.pem
 
-	reverse_proxy localhost:{$APP_PORT:8081} {
+	reverse_proxy localhost:{$APP_PORT:3000} {
 		header_up X-Real-IP {remote_host}
 	}
 

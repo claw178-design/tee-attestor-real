@@ -50,12 +50,12 @@ CADDY_RUNNING=$(pgrep -x caddy > /dev/null 2>&1 && echo "yes" || echo "no")
 if [ "$CADDY_RUNNING" = "yes" ]; then
   # EigenCompute's compute-source-env.sh already started Caddy
   echo "[entrypoint] Caddy already running (started by EigenCompute)"
-  export TEE_ATTESTOR_PORT="${APP_PORT:-8081}"
+  export TEE_ATTESTOR_PORT="${APP_PORT:-3000}"
   echo "[entrypoint] Caddy :8080 (HTTPS) → Node.js :${TEE_ATTESTOR_PORT}"
 elif [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
   # Certs exist but Caddy not running — start it ourselves
   echo "[entrypoint] TLS certs found, starting Caddy for HTTPS on :8080"
-  export TEE_ATTESTOR_PORT="${APP_PORT:-8081}"
+  export TEE_ATTESTOR_PORT="${APP_PORT:-3000}"
   echo "[entrypoint] Caddy :8080 (HTTPS) → Node.js :${TEE_ATTESTOR_PORT}"
   caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 else
