@@ -106,18 +106,42 @@ function detectImageDigest(): string {
   return ''
 }
 
-/** Async background fetch of image_digest from EigenCompute verify API */
-async function fetchImageDigestFromVerifyAPI(appId: string): Promise<string> {
-  if (!appId) return ''
+/** Async background fetch of image_digest from EigenCompute verify API or GHCR */
+async function fetchImageDigestFallback(appId: string): Promise<string> {
+  // 1. Try EigenCompute verify API (most reliable source)
+  if (appId) {
+    const env = process.env.ECLOUD_ENV || 'sepolia'
+    const verifyBase = env === 'mainnet'
+      ? 'https://verify.eigencloud.xyz'
+      : 'https://verify-sepolia.eigencloud.xyz'
+    try {
+      const res = await fetch(`${verifyBase}/api/app/${appId}`, {
+        signal: AbortSignal.timeout(10000),
+      })
+      if (res.ok) {
+        const data = await res.json() as any
+        const digest = data?.imageDigest || data?.image_digest || ''
+        if (digest && digest.startsWith('sha256:')) {
+          console.log(`[tee-attestor] Fetched image_digest from EigenCompute verify API: ${digest}`)
+          return digest
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Try GHCR API
   try {
-    const url = `https://verify-sepolia.eigencloud.xyz/api/app/${appId}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
-    if (!res.ok) return ''
-    const data = await res.json() as any
-    const digest = data?.image_digest || data?.imageDigest || ''
-    if (digest && digest.startsWith('sha256:')) {
-      console.log(`[tee-attestor] Fetched image_digest from verify API: ${digest}`)
-      return digest
+    const url = `https://ghcr.io/v2/claw178-design/tee-attestor-real/manifests/latest`
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'Accept': 'application/vnd.docker.distribution.manifest.v2+json' },
+    })
+    if (res.ok) {
+      const digest = res.headers.get('docker-content-digest') || ''
+      if (digest && digest.startsWith('sha256:')) {
+        console.log(`[tee-attestor] Fetched image_digest from GHCR: ${digest}`)
+        return digest
+      }
     }
   } catch {}
   return ''
@@ -628,7 +652,7 @@ export function startTeeServer(port = TEE_PORT): http.Server {
 
     // Background: try to fetch image_digest from EigenCompute verify API if not set
     if (!attestation.image_digest || !attestation.image_digest.startsWith('sha256:')) {
-      fetchImageDigestFromVerifyAPI(attestation.app_id).then(digest => {
+      fetchImageDigestFallback(attestation.app_id).then(digest => {
         if (digest) {
           attestation.image_digest = digest
           console.log(`[tee-attestor] Updated image_digest: ${digest}`)

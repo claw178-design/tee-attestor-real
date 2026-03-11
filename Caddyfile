@@ -14,6 +14,9 @@
 
 	reverse_proxy localhost:{$APP_PORT:3000} {
 		header_up X-Real-IP {remote_host}
+		# WebSocket support for /ws endpoint
+		header_up Connection {>Connection}
+		header_up Upgrade {>Upgrade}
 	}
 
 	header {
