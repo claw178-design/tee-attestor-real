@@ -29,6 +29,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { pemToEthWallet, ethSignClaim, ethVerifyClaim, EthSignRequest } from './eth-signer'
 import { ethers } from 'ethers'
+import { verifyProof, ZkProof, decodeProofBlob, zkArtifactsAvailable } from './zk-prover'
 
 // ─── Bootstrap: source KMS env if available ──────────────────────────
 // EigenCompute's compute-source-env.sh writes env vars to /tmp/.env
@@ -343,6 +344,62 @@ function loadOrGenerateKeys(): AttestorKeys {
   return { privateKey, publicKey, fingerprint }
 }
 
+// ─── ZK Proof Verification ──────────────────────────────────────────
+
+/** Whether ZK artifacts are available in this deployment */
+let zkEnabled = false
+
+function initZk(): void {
+  zkEnabled = zkArtifactsAvailable()
+  if (zkEnabled) {
+    console.log(`[tee-attestor] ZK proof verification: ENABLED (artifacts found)`)
+  } else {
+    console.log(`[tee-attestor] ZK proof verification: DISABLED (artifacts not found)`)
+  }
+}
+
+/**
+ * Validate that a ZK proof's public signals match the claim hashes.
+ * Returns null if valid, or an error string if invalid.
+ */
+async function validateZkProof(
+  proof: ZkProof,
+  hashes: { usage_hash: string; model_hash: string; prompt_hash: string; response_hash: string },
+): Promise<string | null> {
+  // Check public signals count
+  if (!proof.publicSignals || proof.publicSignals.length !== 4) {
+    return 'ZK proof must have exactly 4 public signals'
+  }
+
+  // Convert public signals (decimal strings from snarkjs) to 0x hex for comparison
+  const signalHexes = proof.publicSignals.map(s => {
+    const bi = BigInt(s)
+    return '0x' + bi.toString(16).padStart(64, '0')
+  })
+
+  // Verify public signals match the claimed hashes
+  const expectedOrder = [hashes.usage_hash, hashes.model_hash, hashes.prompt_hash, hashes.response_hash]
+  for (let i = 0; i < 4; i++) {
+    const expected = expectedOrder[i].toLowerCase()
+    const actual = signalHexes[i].toLowerCase()
+    if (expected !== actual) {
+      return `Public signal ${i} mismatch: expected ${expected}, got ${actual}`
+    }
+  }
+
+  // Verify the Groth16 proof mathematically
+  try {
+    const valid = await verifyProof(proof)
+    if (!valid) {
+      return 'Groth16 proof verification failed (invalid proof)'
+    }
+  } catch (e: any) {
+    return `Groth16 verification error: ${e.message}`
+  }
+
+  return null // valid
+}
+
 // ─── Claim Signing ──────────────────────────────────────────────────
 
 interface SignRequest {
@@ -485,11 +542,14 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
       return
     }
 
-    // POST /sign — Sign a claim
+    // POST /sign — Sign a claim (ECDSA)
+    // Also requires ZK proof when ZK is enabled.
     if (url === '/sign' && req.method === 'POST') {
       try {
         const body = await readBody(req)
-        const claimReq: SignRequest = JSON.parse(body)
+        const parsed = JSON.parse(body)
+        const claimReq: SignRequest = parsed
+        const zkProofData: ZkProof | string | undefined = parsed.zk_proof
 
         // Validate required fields
         const required = ['usage_hash', 'model_hash', 'prompt_hash', 'response_hash', 'endpoint', 'timestamp']
@@ -511,13 +571,50 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
           }
         }
 
+        // ── ZK Proof Verification Gate ──
+        let zkVerified = false
+        if (zkEnabled) {
+          if (!zkProofData) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({
+              error: 'ZK proof required. TEE will not sign unverified hashes.',
+            }))
+            return
+          }
+
+          let proof: ZkProof
+          if (typeof zkProofData === 'string') {
+            try { proof = decodeProofBlob(zkProofData) } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ error: 'Invalid zk_proof format' }))
+              return
+            }
+          } else {
+            proof = zkProofData
+          }
+
+          const zkError = await validateZkProof(proof, claimReq)
+          if (zkError) {
+            console.log(`[tee-attestor] ZK proof rejected: ${zkError}`)
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: `ZK proof invalid: ${zkError}` }))
+            return
+          }
+
+          zkVerified = true
+          console.log(`[tee-attestor] ZK proof verified successfully`)
+        }
+
         const signed = signClaim(claimReq, keys, attestation)
+        if (zkVerified) {
+          signed.zk_proof = typeof zkProofData === 'string' ? zkProofData : Buffer.from(JSON.stringify(zkProofData)).toString('base64')
+        }
         signCount++
 
-        console.log(`[tee-attestor] Signed claim #${signCount} — endpoint: ${claimReq.endpoint}`)
+        console.log(`[tee-attestor] Signed claim #${signCount} — endpoint: ${claimReq.endpoint}, zk: ${zkVerified}`)
 
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, claim: signed }))
+        res.end(JSON.stringify({ ok: true, claim: signed, zk_verified: zkVerified }))
       } catch (e: any) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: `Invalid request: ${e.message}` }))
@@ -558,10 +655,15 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
     }
 
     // POST /eth-sign — Sign claim with EIP-712 (Ethereum-compatible)
+    // Accepts optional `zk_proof` field. If ZK is enabled and proof is provided,
+    // the TEE verifies the proof before signing. If ZK is enabled but no proof
+    // is provided, the request is rejected (prevents signing unverified hashes).
     if (url === '/eth-sign' && req.method === 'POST') {
       try {
         const body = await readBody(req)
-        const claimReq: EthSignRequest = JSON.parse(body)
+        const parsed = JSON.parse(body)
+        const claimReq: EthSignRequest = parsed
+        const zkProofData: ZkProof | string | undefined = parsed.zk_proof
 
         // Validate required fields
         const required = ['usage_hash', 'model_hash', 'prompt_hash', 'response_hash', 'endpoint', 'timestamp']
@@ -571,6 +673,49 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
             res.end(JSON.stringify({ error: `Missing required field: ${field}` }))
             return
           }
+        }
+
+        // ── ZK Proof Verification Gate ──
+        let zkVerified = false
+        if (zkEnabled) {
+          if (!zkProofData) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({
+              error: 'ZK proof required. TEE will not sign unverified hashes. Provide zk_proof (ZkProof object or base64 blob).',
+            }))
+            return
+          }
+
+          // Decode proof: accept either ZkProof object or base64 blob string
+          let proof: ZkProof
+          if (typeof zkProofData === 'string') {
+            try {
+              proof = decodeProofBlob(zkProofData)
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ error: 'Invalid zk_proof: must be a ZkProof object or base64-encoded blob' }))
+              return
+            }
+          } else {
+            proof = zkProofData
+          }
+
+          const zkError = await validateZkProof(proof, {
+            usage_hash: claimReq.usage_hash,
+            model_hash: claimReq.model_hash,
+            prompt_hash: claimReq.prompt_hash,
+            response_hash: claimReq.response_hash,
+          })
+
+          if (zkError) {
+            console.log(`[tee-attestor] ZK proof rejected: ${zkError}`)
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: `ZK proof invalid: ${zkError}` }))
+            return
+          }
+
+          zkVerified = true
+          console.log(`[tee-attestor] ZK proof verified successfully`)
         }
 
         // Inject default verifier contract address if not provided
@@ -592,10 +737,11 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
             app_id: attestation.app_id,
             image_digest: attestation.image_digest,
             tee_type: attestation.tee_type,
+            zk_verified: zkVerified,
           },
         }
 
-        console.log(`[tee-attestor] EIP-712 signed claim #${signCount} — endpoint: ${claimReq.endpoint}, signer: ${wallet.address}`)
+        console.log(`[tee-attestor] EIP-712 signed claim #${signCount} — endpoint: ${claimReq.endpoint}, signer: ${wallet.address}, zk: ${zkVerified}`)
 
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(result))
@@ -632,6 +778,7 @@ function createHandler(keys: AttestorKeys, attestation: AttestationReport) {
 export function startTeeServer(port = TEE_PORT): http.Server {
   const keys = loadOrGenerateKeys()
   const attestation = collectAttestation(keys)
+  initZk()
   const server = http.createServer(createHandler(keys, attestation))
 
   server.listen(port, '0.0.0.0', () => {

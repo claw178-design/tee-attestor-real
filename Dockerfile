@@ -28,6 +28,11 @@ COPY --from=app-build /app/dist/ dist/
 COPY --from=app-build /app/package.json ./
 RUN npm install --omit=dev --ignore-scripts
 
+# ZK artifacts for proof verification inside TEE
+COPY artifacts/claim_hash_js/ /app/artifacts/claim_hash_js/
+COPY artifacts/claim_hash_final.zkey /app/artifacts/claim_hash_final.zkey
+COPY artifacts/verification_key.json /app/artifacts/verification_key.json
+
 # Caddyfile for EigenCompute TLS (used when tls-keygen is available)
 COPY Caddyfile /etc/caddy/Caddyfile
 
