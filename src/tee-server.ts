@@ -160,7 +160,7 @@ function getEigenEnv() {
 }
 
 // Default ClaimVerifierV2 contract address on Sepolia
-const DEFAULT_VERIFIER_CONTRACT = process.env.CLAIM_VERIFIER_ADDRESS || '0x98b05fb625B8867f073277B7EAbF1ccC7E0926c9'
+const DEFAULT_VERIFIER_CONTRACT = process.env.CLAIM_VERIFIER_ADDRESS || '0xd957C897Bd5bA5D4969F3379D4f90da74Ab9763C'
 
 // ─── Remote Attestation ─────────────────────────────────────────────
 

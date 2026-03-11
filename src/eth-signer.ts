@@ -11,8 +11,8 @@ import { ethers } from 'ethers'
 
 // EIP-712 types matching ClaimVerifier.sol
 const EIP712_DOMAIN = {
-  name: 'ClaimVerifierV2',
-  version: '2',
+  name: 'ClaimVerifier',
+  version: '1',
 }
 
 const CLAIM_TYPES = {
@@ -72,7 +72,7 @@ export async function ethSignClaim(
   wallet: ethers.Wallet,
 ): Promise<EthSignedClaim> {
   const chainId = req.chain_id || 11155111 // Sepolia default
-  const verifyingContract = req.verifier_address || '0x98b05fb625B8867f073277B7EAbF1ccC7E0926c9'
+  const verifyingContract = req.verifier_address || '0xd957C897Bd5bA5D4969F3379D4f90da74Ab9763C'
 
   const domain = {
     ...EIP712_DOMAIN,
