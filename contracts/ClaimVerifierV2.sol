@@ -115,8 +115,8 @@ contract ClaimVerifierV2 {
     function _buildDomainSeparator() internal view returns (bytes32) {
         return keccak256(abi.encode(
             _EIP712_DOMAIN_TYPEHASH,
-            keccak256(bytes("ClaimVerifierV2")),
-            keccak256(bytes("2")),
+            keccak256(bytes("ClaimVerifier")),
+            keccak256(bytes("1")),
             block.chainid,
             address(this)
         ));
