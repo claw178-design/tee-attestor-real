@@ -103,10 +103,23 @@ function detectImageDigest(): string {
     } catch {}
   }
 
-  // Fallback: container hostname
-  if (process.env.HOSTNAME) {
-    return `host:${process.env.HOSTNAME}`
-  }
+  return ''
+}
+
+/** Async background fetch of image_digest from EigenCompute verify API */
+async function fetchImageDigestFromVerifyAPI(appId: string): Promise<string> {
+  if (!appId) return ''
+  try {
+    const url = `https://verify-sepolia.eigencloud.xyz/api/app/${appId}`
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
+    if (!res.ok) return ''
+    const data = await res.json() as any
+    const digest = data?.image_digest || data?.imageDigest || ''
+    if (digest && digest.startsWith('sha256:')) {
+      console.log(`[tee-attestor] Fetched image_digest from verify API: ${digest}`)
+      return digest
+    }
+  } catch {}
   return ''
 }
 
@@ -612,6 +625,16 @@ export function startTeeServer(port = TEE_PORT): http.Server {
     console.log(`[tee-attestor]   GET  /attestation — Full remote attestation report`)
     console.log(`[tee-attestor]   GET  /pubkey     — Public key`)
     console.log(`[tee-attestor]   GET  /health     — Health check`)
+
+    // Background: try to fetch image_digest from EigenCompute verify API if not set
+    if (!attestation.image_digest || !attestation.image_digest.startsWith('sha256:')) {
+      fetchImageDigestFromVerifyAPI(attestation.app_id).then(digest => {
+        if (digest) {
+          attestation.image_digest = digest
+          console.log(`[tee-attestor] Updated image_digest: ${digest}`)
+        }
+      }).catch(() => {})
+    }
   })
 
   return server
